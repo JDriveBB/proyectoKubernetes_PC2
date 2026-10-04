@@ -187,7 +187,20 @@ Con `propagation_policy="Background"` Kubernetes borra también los Pods del Job
 
 ### Manejo de errores del menú
 
-Cada acción corre dentro de un `try`. Un `ApiException` (nombre repetido, namespace inexistente...) imprime `Error de Kubernetes (<status>): <reason>`. Cualquier otra excepción imprime `Error: ...`. En ningún caso se cierra el menú.
+Cada acción corre dentro de un `try` y, si algo falla, el menú sigue abierto. En vez de la traza original, `explicar_error` imprime una frase con la causa probable y qué hacer:
+
+| Situación | Mensaje |
+|---|---|
+| Minikube detenido (`minikube stop`) o sin kubeconfig | `No hay un cluster activo en kubeconfig.` y el comando para arrancarlo |
+| Docker Desktop cerrado o el contenedor de Minikube parado | `No se pudo conectar con el cluster.` y que revise `minikube status` |
+| Falta el namespace | `El namespace estudiantes-202630 no existe.` y el `kubectl apply` que lo crea |
+| El Job o el Pod ya no existe | `Ya no existe en el cluster: ...` |
+| Nombre de Job repetido | `Ya existe un Job con ese nombre.` |
+| Logs de un contenedor que aún no arranca | `El contenedor todavia no ha arrancado: ...`; si el motivo es `ErrImageNeverPull`, indica ejecutar `preparar-imagenes.ps1` |
+| Permisos, petición inválida o error interno del API server | el código HTTP y el mensaje que devuelve Kubernetes |
+| Catálogo ausente o con JSON inválido | aviso al arrancar y el programa termina con código 1 |
+
+Con el clúster apagado, el cliente reintentaba la conexión varias veces antes de fallar. `cargar_configuracion` desactiva esos reintentos para que el aviso aparezca enseguida. Además, la limpieza sigue con el resto de Jobs aunque alguno ya se haya borrado por otro lado, y si se cierra la entrada estándar el programa termina con `Interrumpido.` en vez de una traza.
 
 ## Complejidad
 

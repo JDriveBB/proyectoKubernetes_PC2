@@ -28,6 +28,8 @@ from pathlib import Path
 
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
+from kubernetes.config.config_exception import ConfigException
+from urllib3.exceptions import MaxRetryError
 
 NAMESPACE = "estudiantes-202630"
 RAIZ = Path(__file__).resolve().parent.parent
@@ -163,9 +165,21 @@ def nombre_job(lenguaje, tarea, complejidad):
 # 2. Creacion del Job con el cliente Python de Kubernetes
 # ---------------------------------------------------------------------------
 
+def cargar_configuracion():
+    """Carga kubeconfig y desactiva los reintentos de conexion.
+
+    Con el cluster apagado, cada reintento suma unos segundos de espera antes
+    de mostrar el error; sin reintentos el aviso llega enseguida.
+    """
+    config.load_kube_config()
+    configuracion = client.Configuration.get_default_copy()
+    configuracion.retries = 0
+    client.Configuration.set_default(configuracion)
+
+
 def cliente_batch():
     """Carga la configuracion de kubeconfig y devuelve un BatchV1Api."""
-    config.load_kube_config()
+    cargar_configuracion()
     return client.BatchV1Api()
 
 
@@ -293,7 +307,7 @@ def consultar_logs(nombre):
     Los logs pertenecen al Pod, no al Job. Kubernetes etiqueta cada Pod que
     crea un Job con `job-name=<nombre del Job>`, y por ahi se le encuentra.
     """
-    config.load_kube_config()
+    cargar_configuracion()
     core = client.CoreV1Api()
 
     pods = core.list_namespaced_pod(
@@ -393,7 +407,7 @@ def accion_logs():
         return
 
     print(f"\nSalida de {nombre}:")
-    print(consultar_logs(nombre))
+    print(consultar_logs(nombre) or "(el contenedor todavia no ha escrito nada)")
 
 
 def accion_limpiar():
@@ -411,8 +425,80 @@ def accion_limpiar():
         return
 
     for nombre in terminados:
-        eliminar_job(nombre)
+        try:
+            eliminar_job(nombre)
+        except ApiException as error:
+            # Si otro proceso ya lo borro, no hay nada que hacer; se sigue
+            # con los demas en vez de cortar la limpieza a medias.
+            if error.status != 404:
+                raise
     print(f"{len(terminados)} tarea(s) eliminada(s).")
+
+
+# ---------------------------------------------------------------------------
+# Mensajes de error
+# ---------------------------------------------------------------------------
+
+def detalle_api(error):
+    """Devuelve el mensaje que manda el API server dentro de una ApiException."""
+    try:
+        return json.loads(error.body)["message"]
+    except (TypeError, ValueError, KeyError):
+        return error.reason
+
+
+def explicar_error(error):
+    """Traduce los errores mas comunes a una frase con la causa y que hacer.
+
+    El texto original de las excepciones (trazas de urllib3, rutas de
+    kubeconfig...) no ayuda a quien usa el menu; aqui se resume.
+    """
+    if isinstance(error, ConfigException):
+        # Pasa tras `minikube stop` (deja kubeconfig sin contexto activo) o
+        # si nunca se arranco Minikube en esta maquina.
+        return (
+            "No hay un cluster activo en kubeconfig. Arranca Minikube con:\n"
+            "  minikube start --driver=docker --container-runtime=docker"
+        )
+    if isinstance(error, MaxRetryError):
+        # kubeconfig apunta al cluster, pero nadie responde en ese puerto.
+        return (
+            "No se pudo conectar con el cluster. Comprueba que Docker Desktop "
+            "este abierto y que Minikube este encendido (minikube status)."
+        )
+    if isinstance(error, ApiException):
+        detalle = detalle_api(error)
+        if error.status in (401, 403):
+            return f"Kubernetes rechazo la operacion por permisos: {detalle}"
+        if error.status == 404 and "namespaces" in detalle:
+            return (
+                f"El namespace {NAMESPACE} no existe. Crealo con:\n"
+                "  kubectl apply -f .\\k8s\\00-namespace.yaml"
+            )
+        if error.status == 404:
+            return f"Ya no existe en el cluster: {detalle}"
+        if error.status == 409:
+            return (
+                "Ya existe un Job con ese nombre. Espera un segundo y "
+                "vuelve a intentarlo."
+            )
+        if error.status == 400 and "waiting to start" in detalle:
+            mensaje = f"El contenedor todavia no ha arrancado: {detalle}"
+            if "ErrImageNeverPull" in detalle:
+                mensaje += (
+                    "\nLa imagen no esta dentro de Minikube. Construyela con:\n"
+                    "  .\\scripts\\preparar-imagenes.ps1"
+                )
+            return mensaje
+        if error.status >= 500:
+            return (
+                f"El cluster respondio con un error interno ({error.status}): "
+                f"{detalle}. Prueba de nuevo en unos segundos."
+            )
+        return f"Kubernetes rechazo la peticion ({error.status}): {detalle}"
+    if isinstance(error, KeyError):
+        return f"Falta la clave {error} en catalogo/tareas.json."
+    return f"Error inesperado: {error}"
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +506,14 @@ def accion_limpiar():
 # ---------------------------------------------------------------------------
 
 def menu():
-    catalogo = cargar_catalogo()
+    try:
+        catalogo = cargar_catalogo()
+    except FileNotFoundError:
+        print(f"No se encontro el catalogo en {CATALOGO}.")
+        return 1
+    except json.JSONDecodeError as error:
+        print(f"El catalogo {CATALOGO} no es un JSON valido: {error}")
+        return 1
 
     acciones = {
         "1": ("Ejecutar una tarea nueva", lambda: accion_ejecutar(catalogo)),
@@ -445,16 +538,16 @@ def menu():
 
         try:
             acciones[opcion][1]()
-        except ApiException as error:
-            # Errores que devuelve el API server: nombre repetido, namespace
-            # inexistente, permisos insuficientes...
-            print(f"\nError de Kubernetes ({error.status}): {error.reason}")
+        except EOFError:
+            raise
         except Exception as error:  # noqa: BLE001 - el menu no debe caerse
-            print(f"\nError: {error}")
+            # Errores del API server (nombre repetido, namespace inexistente,
+            # permisos...), cluster apagado o catalogo incompleto.
+            print(f"\nError: {explicar_error(error)}")
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(menu())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         print("\nInterrumpido.")
