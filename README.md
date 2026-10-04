@@ -4,9 +4,9 @@ Gestor de Jobs de Kubernetes por línea de comandos, escrito en Python. El menú
 
 ## Integrantes
 
-- Nombre Apellido
-- Nombre Apellido
-- Nombre Apellido
+- Santy Baza
+- Samuel Lambertino
+- Juan Benavides 
 
 **Video demo:** [YouTube](TODO-enlace-al-video)
 
