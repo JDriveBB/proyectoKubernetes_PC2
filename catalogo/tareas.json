@@ -1,7 +1,7 @@
 {
   "python": {
     "image": "kubernates-202630-python:1.0",
-    "tasks": ["hola", "ordenar", "fib", "matriz"]
+    "tasks": ["hola", "ordenar", "fib", "matriz", "primos"]
   },
   "java": {
     "image": "kubernates-202630-java:1.0",

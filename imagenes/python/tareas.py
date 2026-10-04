@@ -7,6 +7,7 @@ Contrato, identico en las tres imagenes:
   exit code: 0 = exito, != 0 = fallo (deja el Job en Failed)
 """
 import json
+import math
 import os
 import platform
 import random
@@ -57,11 +58,26 @@ def matriz(n):
     return {"n": n, "traza": round(sum(c[i][i] for i in range(n)), 6)}
 
 
+def primos(n):
+    print(f"Criba de Eratostenes hasta {n}...")
+    criba = bytearray([1]) * (n + 1)  # un byte por numero: la memoria crece con N
+    criba[:2] = b"\x00\x00"[: n + 1]
+    for i in range(2, math.isqrt(n) + 1):
+        if criba[i]:
+            criba[i * i :: i] = bytes(len(range(i * i, n + 1, i)))
+    total = criba.count(1)
+    mayor = criba.rfind(1)
+    # Verificacion: el mayor primo encontrado se comprueba por division de prueba.
+    assert mayor < 2 or all(mayor % d for d in range(2, math.isqrt(mayor) + 1))
+    return {"n": n, "primos": total, "mayor": mayor}
+
+
 TAREAS = {
     "hola": hola,
     "ordenar": ordenar,
     "fib": fib,
     "matriz": matriz,
+    "primos": primos,
 }
 
 
