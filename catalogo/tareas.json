@@ -1,0 +1,14 @@
+{
+  "python": {
+    "image": "kubernates-202630-python:1.0",
+    "tasks": ["hola", "ordenar", "fib", "matriz"]
+  },
+  "java": {
+    "image": "kubernates-202630-java:1.0",
+    "tasks": ["hola", "ordenar", "fib", "matriz"]
+  },
+  "c": {
+    "image": "kubernates-202630-c:1.0",
+    "tasks": ["hola", "ordenar", "fib", "matriz"]
+  }
+}
