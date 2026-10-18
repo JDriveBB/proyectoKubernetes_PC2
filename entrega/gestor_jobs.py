@@ -1,26 +1,3 @@
-"""Gestor de Jobs de Kubernetes para la practica 202630.
-
-ESQUELETO: el andamiaje del menu y del cliente de Kubernetes ya esta puesto.
-Lo que falta esta marcado con TODO y con `...` en los campos a completar. El
-foco de la practica es Kubernetes, no Python: no tienes que inventar la
-estructura del programa, sino entender que significa cada campo del Job.
-
-El programa es un menu interactivo:
-
-    1. Ejecutar una tarea nueva
-    2. Revisar el estado de las tareas
-    3. Ver los logs de una tarea
-    4. Limpiar las tareas terminadas
-    5. Salir
-
-No se permite invocar `kubectl` desde este programa; el Job se crea con el
-cliente oficial de Python (`pip install -r requirements.txt`).
-
-Se ejecuta sin argumentos:
-
-    python gestor_jobs.py
-"""
-
 import json
 import re
 import time
@@ -35,12 +12,6 @@ NAMESPACE = "estudiantes-202630"
 RAIZ = Path(__file__).resolve().parent.parent
 CATALOGO = RAIZ / "catalogo" / "tareas.json"
 
-# La complejidad elegida fija DOS cosas a la vez:
-#
-#   - los recursos que se le piden al contenedor (NIVELES), y
-#   - el tamano del trabajo, el parametro N que recibe la tarea (TAMANOS).
-#
-# Un nivel alto pide mas CPU y mas memoria, y ademas manda un N mas grande.
 NIVELES = {
     "baja": {
         "cpu_request": "100m",
@@ -62,8 +33,6 @@ NIVELES = {
     },
 }
 
-# Valor de N por tarea y nivel. Al agregar una tarea nueva al catalogo, agrega
-# aqui su fila.
 TAMANOS = {
     "hola": {"baja": 0, "media": 0, "alta": 0},
     "ordenar": {"baja": 100000, "media": 1000000, "alta": 3000000},
@@ -73,22 +42,14 @@ TAMANOS = {
 }
 
 
+# Carga y retorna el catálogo de tareas desde el archivo JSON.
 def cargar_catalogo():
-    """Devuelve el contenido de catalogo/tareas.json como diccionario."""
     with CATALOGO.open(encoding="utf-8") as archivo:
         return json.load(archivo)
 
 
-# ---------------------------------------------------------------------------
-# Utilidades del menu
-# ---------------------------------------------------------------------------
-
+# Muestra un menú de opciones numeradas en consola y retorna la opción seleccionada o None.
 def elegir_opcion(titulo, opciones):
-    """Muestra una lista numerada y devuelve la opcion elegida, o None.
-
-    `opciones` es una lista de textos. Devuelve el texto elegido. Una entrada
-    vacia o un 0 significan "volver atras" y devuelven None.
-    """
     print(f"\n{titulo}")
     for numero, opcion in enumerate(opciones, start=1):
         print(f"  {numero}. {opcion}")
@@ -103,27 +64,14 @@ def elegir_opcion(titulo, opciones):
         print(f"Escribe un numero entre 0 y {len(opciones)}.")
 
 
-# ---------------------------------------------------------------------------
-# 1. Seleccion de lenguaje, tarea y complejidad
-# ---------------------------------------------------------------------------
-
+# Solicita interactivamente lenguaje, tarea y complejidad, retornando la configuración y recursos elegidos.
 def seleccionar(catalogo):
-    """Pide lenguaje, tarea y complejidad por menu.
-
-    Devuelve (lenguaje, tarea, complejidad, imagen, argumentos, recursos), o
-    None si el usuario decide volver. `argumentos` es la lista que recibira el
-    contenedor: el nombre de la tarea y el valor de N, por ejemplo
-    ["fib", "30"]. `recursos` es la fila de NIVELES del nivel elegido.
-    """
     lenguaje = elegir_opcion("Lenguaje:", sorted(catalogo))
     if lenguaje is None:
         return None
 
     definicion = catalogo[lenguaje]
-
-    # Las tareas de ese lenguaje estan en definicion["tasks"].
     tarea = elegir_opcion("Tarea:", definicion["tasks"])
-
     if tarea is None:
         return None
 
@@ -132,8 +80,6 @@ def seleccionar(catalogo):
         print(f"La tarea {tarea} no tiene tamanos definidos en TAMANOS.")
         return None
 
-    # El menu muestra cada nivel con el N y la memoria que implica, para que se
-    # vea que la complejidad es mas que una etiqueta.
     etiquetas = [
         f"{nivel} (N={tamanos[nivel]}, memoria {NIVELES[nivel]['mem_limit']})"
         for nivel in NIVELES
@@ -143,77 +89,35 @@ def seleccionar(catalogo):
         return None
     complejidad = etiqueta.split(" ")[0]
 
-    imagen = definicion["image"]  # la imagen que declara el catalogo.
-    argumentos = [tarea, str(tamanos[complejidad])]  # [tarea, N del nivel elegido].
-    recursos = NIVELES[complejidad]  # la fila de NIVELES del nivel elegido.
+    imagen = definicion["image"]
+    argumentos = [tarea, str(tamanos[complejidad])]
+    recursos = NIVELES[complejidad]
 
     return lenguaje, tarea, complejidad, imagen, argumentos, recursos
 
 
+# Construye y retorna un nombre válido para el Job en Kubernetes.
 def nombre_job(lenguaje, tarea, complejidad):
-    """Construye un nombre de Job valido para Kubernetes.
-
-    Reglas de Kubernetes: solo minusculas, digitos y guiones, maximo 63
-    caracteres. El sufijo de tiempo permite repetir la misma tarea sin chocar
-    con un Job anterior que siga en el namespace.
-    """
     base = f"{lenguaje}-{tarea}-{complejidad}-{int(time.time())}".lower()
     return re.sub(r"[^a-z0-9-]", "-", base)[:63].strip("-")
 
 
-# ---------------------------------------------------------------------------
-# 2. Creacion del Job con el cliente Python de Kubernetes
-# ---------------------------------------------------------------------------
-
+# Carga la configuración de kubeconfig y desactiva los reintentos de conexión.
 def cargar_configuracion():
-    """Carga kubeconfig y desactiva los reintentos de conexion.
-
-    Con el cluster apagado, cada reintento suma unos segundos de espera antes
-    de mostrar el error; sin reintentos el aviso llega enseguida.
-    """
     config.load_kube_config()
     configuracion = client.Configuration.get_default_copy()
     configuracion.retries = 0
     client.Configuration.set_default(configuracion)
 
 
+# Inicializa la configuración de Kubernetes y retorna una instancia del cliente BatchV1Api.
 def cliente_batch():
-    """Carga la configuracion de kubeconfig y devuelve un BatchV1Api."""
     cargar_configuracion()
     return client.BatchV1Api()
 
 
+# Construye y envía la definición del Job al clúster de Kubernetes en el namespace configurado.
 def crear_job(nombre, imagen, argumentos, recursos):
-    """Crea el Job en el namespace `NAMESPACE` y devuelve su nombre.
-
-    El objeto que se arma abajo es el equivalente exacto de este YAML:
-
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-          name: <nombre>
-          namespace: estudiantes-202630
-        spec:
-          backoffLimit: 0
-          template:
-            spec:
-              restartPolicy: Never
-              containers:
-                - name: tarea
-                  image: <imagen>
-                  imagePullPolicy: Never
-                  args: [<argumentos>]
-                  resources:
-                    requests: { cpu: <cpu_request>, memory: <mem_request> }
-                    limits:   { cpu: <cpu_limit>,   memory: <mem_limit> }
-
-    Completa los `...` comparando cada linea con ese YAML. Ojo: en el cliente
-    de Python los campos van en snake_case (`image_pull_policy`,
-    `restart_policy`, `backoff_limit`) y en el YAML en camelCase.
-    """
-    # `requests` es lo que Kubernetes reserva para programar el Pod; `limits`
-    # es el tope. Si el contenedor supera el limite de memoria, lo mata con
-    # OOMKilled; si supera el de CPU, lo frena.
     limites = client.V1ResourceRequirements(
         requests={"cpu": recursos["cpu_request"], "memory": recursos["mem_request"]},
         limits={"cpu": recursos["cpu_limit"], "memory": recursos["mem_limit"]},
@@ -246,30 +150,16 @@ def crear_job(nombre, imagen, argumentos, recursos):
         spec=especificacion,
     )
 
-    # Se envia el objeto al cluster.
     cliente_batch().create_namespaced_job(namespace=NAMESPACE, body=job)
     return nombre
 
 
-# ---------------------------------------------------------------------------
-# 3. Consulta de estado
-# ---------------------------------------------------------------------------
-
+# Traduce los contadores de estado del Job a una descripción legible.
 def describir_estado(status):
-    """Traduce el `status` de un Job a una frase corta.
-
-    Los contadores valen None mientras Kubernetes no los ha fijado, de ahi el
-    `or 0`.
-    """
     activos = status.active or 0
     correctos = status.succeeded or 0
     fallidos = status.failed or 0
 
-    # Se distinguen los cuatro casos, en este orden de prioridad:
-    #   - `activos` > 0    -> el Job sigue en ejecucion;
-    #   - `correctos` > 0  -> el Job termino correctamente;
-    #   - `fallidos` > 0   -> el Job fallo;
-    #   - los tres en cero -> el Pod todavia no ha arrancado.
     if activos > 0:
         return "en ejecucion"
     if correctos > 0:
@@ -279,34 +169,20 @@ def describir_estado(status):
     return "pendiente (el Pod todavia no ha arrancado)"
 
 
+# Consulta y retorna la lista de todos los Jobs en el namespace con su estado.
 def listar_jobs():
-    """Devuelve [(nombre, estado)] de todos los Jobs del namespace.
-
-    Esta es la lista que muestra la opcion 2 del menu.
-    """
-    # El resultado tiene un atributo `.items`; de cada elemento se usan
-    # `job.metadata.name` y `job.status`.
     jobs = cliente_batch().list_namespaced_job(namespace=NAMESPACE)
-
     return [(job.metadata.name, describir_estado(job.status)) for job in jobs.items]
 
 
+# Consulta y retorna la descripción del estado de un Job específico.
 def consultar_estado(nombre):
-    """Devuelve una descripcion legible del estado de un Job concreto."""
     job = cliente_batch().read_namespaced_job_status(name=nombre, namespace=NAMESPACE)
     return f"{nombre}: {describir_estado(job.status)}"
 
 
-# ---------------------------------------------------------------------------
-# 4. Consulta de logs
-# ---------------------------------------------------------------------------
-
+# Obtiene y retorna los logs del Pod asociado a un Job determinado.
 def consultar_logs(nombre):
-    """Devuelve la salida del contenedor ejecutado por el Job.
-
-    Los logs pertenecen al Pod, no al Job. Kubernetes etiqueta cada Pod que
-    crea un Job con `job-name=<nombre del Job>`, y por ahi se le encuentra.
-    """
     cargar_configuracion()
     core = client.CoreV1Api()
 
@@ -319,29 +195,15 @@ def consultar_logs(nombre):
 
     pod = pods.items[0].metadata.name
 
-    # Se pide la respuesta sin procesar y se decodifica.
-    # Sin `_preload_content=False`, el cliente 36.x devuelve el repr de los
-    # bytes y los logs se imprimen como b'...\n...' en una sola linea.
     respuesta = core.read_namespaced_pod_log(
         name=pod, namespace=NAMESPACE, _preload_content=False)
     return respuesta.data.decode("utf-8", errors="replace")
 
 
-# ---------------------------------------------------------------------------
-# 5. Limpieza de tareas terminadas
-# ---------------------------------------------------------------------------
-
+# Consulta y retorna los nombres de los Jobs que ya han finalizado.
 def jobs_terminados():
-    """Devuelve los nombres de los Jobs que ya terminaron.
-
-    Terminado = sin Pods activos y con al menos un Pod correcto o fallido. Un
-    Job en ejecucion NO debe aparecer aqui: la limpieza no puede cancelar
-    trabajo que sigue corriendo.
-    """
     jobs = cliente_batch().list_namespaced_job(namespace=NAMESPACE)
 
-    # De cada `job` se usan `job.metadata.name` y los mismos contadores de
-    # `job.status` de describir_estado: `active`, `succeeded` y `failed`.
     return [
         job.metadata.name
         for job in jobs.items
@@ -350,12 +212,8 @@ def jobs_terminados():
     ]
 
 
+# Elimina un Job del clúster junto con los Pods que creó.
 def eliminar_job(nombre):
-    """Elimina un Job y, con el, el Pod que creo."""
-    # `propagation_policy="Background"` es lo que hace que Kubernetes borre
-    # tambien los Pods del Job. Pruebenlo primero sin esa opcion y miren
-    # `kubectl get pods -n estudiantes-202630`: el Job desaparece y su Pod se
-    # queda huerfano en el namespace.
     cliente_batch().delete_namespaced_job(
         name=nombre,
         namespace=NAMESPACE,
@@ -363,10 +221,7 @@ def eliminar_job(nombre):
     )
 
 
-# ---------------------------------------------------------------------------
-# Acciones del menu
-# ---------------------------------------------------------------------------
-
+# Gestiona la selección de parámetros, creación y confirmación de un nuevo Job.
 def accion_ejecutar(catalogo):
     eleccion = seleccionar(catalogo)
     if eleccion is None:
@@ -384,6 +239,7 @@ def accion_ejecutar(catalogo):
     print("  Revisa su estado con la opcion 2 del menu.")
 
 
+# Muestra en consola la lista y el estado de todos los Jobs en el namespace.
 def accion_estado():
     jobs = listar_jobs()
     if not jobs:
@@ -395,6 +251,7 @@ def accion_estado():
         print(f"  - {nombre}: {estado}")
 
 
+# Permite seleccionar un Job existente y muestra los logs de su ejecución.
 def accion_logs():
     jobs = listar_jobs()
     if not jobs:
@@ -410,6 +267,7 @@ def accion_logs():
     print(consultar_logs(nombre) or "(el contenedor todavia no ha escrito nada)")
 
 
+# Lista los Jobs terminados, solicita confirmación y los elimina del namespace.
 def accion_limpiar():
     terminados = jobs_terminados()
     if not terminados:
@@ -428,40 +286,27 @@ def accion_limpiar():
         try:
             eliminar_job(nombre)
         except ApiException as error:
-            # Si otro proceso ya lo borro, no hay nada que hacer; se sigue
-            # con los demas en vez de cortar la limpieza a medias.
             if error.status != 404:
                 raise
     print(f"{len(terminados)} tarea(s) eliminada(s).")
 
 
-# ---------------------------------------------------------------------------
-# Mensajes de error
-# ---------------------------------------------------------------------------
-
+# Extrae el mensaje de error retornado por el API server de Kubernetes.
 def detalle_api(error):
-    """Devuelve el mensaje que manda el API server dentro de una ApiException."""
     try:
         return json.loads(error.body)["message"]
     except (TypeError, ValueError, KeyError):
         return error.reason
 
 
+# Traduce las excepciones de Kubernetes y conexión a mensajes claros y orientativos.
 def explicar_error(error):
-    """Traduce los errores mas comunes a una frase con la causa y que hacer.
-
-    El texto original de las excepciones (trazas de urllib3, rutas de
-    kubeconfig...) no ayuda a quien usa el menu; aqui se resume.
-    """
     if isinstance(error, ConfigException):
-        # Pasa tras `minikube stop` (deja kubeconfig sin contexto activo) o
-        # si nunca se arranco Minikube en esta maquina.
         return (
             "No hay un cluster activo en kubeconfig. Arranca Minikube con:\n"
             "  minikube start --driver=docker --container-runtime=docker"
         )
     if isinstance(error, MaxRetryError):
-        # kubeconfig apunta al cluster, pero nadie responde en ese puerto.
         return (
             "No se pudo conectar con el cluster. Comprueba que Docker Desktop "
             "este abierto y que Minikube este encendido (minikube status)."
@@ -501,10 +346,7 @@ def explicar_error(error):
     return f"Error inesperado: {error}"
 
 
-# ---------------------------------------------------------------------------
-# Menu principal
-# ---------------------------------------------------------------------------
-
+# Despliega el menú principal interactivo y procesa las opciones seleccionadas.
 def menu():
     try:
         catalogo = cargar_catalogo()
@@ -540,12 +382,11 @@ def menu():
             acciones[opcion][1]()
         except EOFError:
             raise
-        except Exception as error:  # noqa: BLE001 - el menu no debe caerse
-            # Errores del API server (nombre repetido, namespace inexistente,
-            # permisos...), cluster apagado o catalogo incompleto.
+        except Exception as error:
             print(f"\nError: {explicar_error(error)}")
 
 
+# Ejecuta el menú principal del programa y maneja la terminación por teclado.
 if __name__ == "__main__":
     try:
         raise SystemExit(menu())
